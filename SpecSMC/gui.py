@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import queue
 import threading
 import time
 import tkinter as tk
@@ -163,6 +164,8 @@ class SMCGui(tk.Tk):
 
         self.smc = None
         self.busy = False
+        self._worker_results = queue.Queue()
+        self._worker_poll_job = None
         self.health_check_job = None
         self.motion_animation_jobs = {}
         self.motion_animation_values = {}
@@ -219,6 +222,7 @@ class SMCGui(tk.Tk):
         self._refresh_ports()
         self._set_controls_enabled(False)
         self._update_all_motion_button_layouts()
+        self._poll_worker_results()
         if auto_connect:
             self.after(200, self._connect)
 
@@ -1391,7 +1395,7 @@ class SMCGui(tk.Tk):
         except Exception as caught_error:
             error = caught_error
 
-        self.after(0, lambda error=error, positions=positions: self._motion_planner_finished(error, positions))
+        self._worker_results.put((self._motion_planner_finished, (error, positions)))
 
     def _send_motion_planner_command(self, command):
         """
@@ -1583,8 +1587,9 @@ class SMCGui(tk.Tk):
         """
         axis = self._selected_settings_axis()
         old_value = self.smc.feedrates.get(axis)
+        value = self.feedrate_var.get()
         self._call_smc(
-            lambda: self.smc.feedrate(axis, float(self.feedrate_var.get())),
+            lambda: self.smc.feedrate(axis, float(value)),
             'Feedrate updated.',
             update_values=True,
             change_message=lambda: self._change_message(axis, 'feedrate', old_value, self.smc.feedrates.get(axis)),
@@ -1596,8 +1601,9 @@ class SMCGui(tk.Tk):
         """
         axis = self._selected_settings_axis()
         old_value = self.smc.currents.get(axis)
+        value = self.current_var.get()
         self._call_smc(
-            lambda: self.smc.current(axis, float(self.current_var.get())),
+            lambda: self.smc.current(axis, float(value)),
             'Current updated.',
             update_values=True,
             change_message=lambda: self._change_message(axis, 'current', old_value, self.smc.currents.get(axis)),
@@ -1609,8 +1615,9 @@ class SMCGui(tk.Tk):
         """
         axis = self._selected_settings_axis()
         old_value = self.smc.homing_sensitivities.get(axis)
+        value = self.homing_sensitivity_var.get()
         self._call_smc(
-            lambda: self.smc.homing_sensitivity(axis, float(self.homing_sensitivity_var.get())),
+            lambda: self.smc.homing_sensitivity(axis, float(value)),
             'Homing sensitivity updated.',
             update_values=True,
             change_message=lambda: self._change_message(axis, 'homing sensitivity', old_value, self.smc.homing_sensitivities.get(axis)),
@@ -1622,8 +1629,9 @@ class SMCGui(tk.Tk):
         """
         axis = self._selected_settings_axis()
         old_value = self.smc.resolutions.get(axis)
+        value = self.steps_var.get()
         self._call_smc(
-            lambda: self.smc.steps_per_unit(axis, float(self.steps_var.get())),
+            lambda: self.smc.steps_per_unit(axis, float(value)),
             'Steps/unit updated.',
             update_values=True,
             change_message=lambda: self._change_message(axis, 'steps/unit', old_value, self.smc.resolutions.get(axis)),
@@ -1709,6 +1717,24 @@ class SMCGui(tk.Tk):
 
         self._run_task(task, done, 'Command failed')
 
+    def _poll_worker_results(self):
+        """Deliver worker results using only the thread that owns Tk."""
+        # Schedule first so a callback exception cannot stop future deliveries.
+        self._worker_poll_job = self.after(50, self._poll_worker_results)
+        while self._worker_poll_job is not None:
+            try:
+                callback, args = self._worker_results.get_nowait()
+            except queue.Empty:
+                break
+            callback(*args)
+
+    def destroy(self):
+        """Cancel result polling before destroying the Tcl/Tk interpreter."""
+        if self._worker_poll_job is not None:
+            self.after_cancel(self._worker_poll_job)
+            self._worker_poll_job = None
+        super().destroy()
+
     def _run_task(self, task, done, error_title):
         """
         Run a callable in a background thread.
@@ -1727,9 +1753,9 @@ class SMCGui(tk.Tk):
             try:
                 result = task()
             except Exception as error:
-                self.after(0, lambda error=error: self._task_failed(error_title, error))
+                self._worker_results.put((self._task_failed, (error_title, error)))
             else:
-                self.after(0, lambda result=result: self._task_done(done, result))
+                self._worker_results.put((self._task_done, (done, result)))
 
         threading.Thread(target=worker, daemon=True).start()
 
