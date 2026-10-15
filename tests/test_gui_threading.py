@@ -111,10 +111,18 @@ class GuiThreadingTests(unittest.TestCase):
         gui = SMCGui.__new__(SMCGui)
         gui._worker_poll_job = 'poll-job'
         gui.after_cancel = Mock()
+        gui._stop_connection_health_check = Mock()
+        gui._stop_all_motion_animations = Mock()
+        controller = Mock()
+        gui.smc = controller
         with patch('tkinter.Tk.destroy') as destroy:
+            destroy.side_effect = lambda: controller.close.assert_called_once_with()
             SMCGui.destroy(gui)
         gui.after_cancel.assert_called_once_with('poll-job')
         self.assertIsNone(gui._worker_poll_job)
+        self.assertIsNone(gui.smc)
+        gui._stop_connection_health_check.assert_called_once()
+        gui._stop_all_motion_animations.assert_called_once()
         destroy.assert_called_once()
 
 
