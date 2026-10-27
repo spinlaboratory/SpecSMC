@@ -90,6 +90,34 @@ class ConnectionTests(unittest.TestCase):
                 smc.send_command = Mock(return_value=reply)
                 self.assertEqual(getattr(smc, method)(), expected)
 
+    def test_position_parses_multiline_reply_and_ignores_step_counts(self):
+        smc = SMC.__new__(SMC)
+        smc.axis = ['Z']
+        smc.send_command = Mock(return_value='echo: X:0\tY:0\nZ: 2.5 E:0\nCount X:0 Z:999')
+        with patch('SpecSMC.SpecSMC.time.sleep'):
+            self.assertEqual(smc.position(), {'Z': 2.5})
+
+    def test_move_does_not_send_motion_without_z_state(self):
+        for cache, method, command in (
+                ('positions', 'position', 'M114'),
+                ('feedrates', 'feedrate', 'M203')):
+            with self.subTest(cache=cache):
+                smc = SMC.__new__(SMC)
+                smc.axis = ['Z']
+                smc.types = ['l']
+                smc._axis_alias_lookup = {'Z': 'Z'}
+                smc.relative_mode = False
+                smc.positions = {'Z': 0}
+                smc.feedrates = {'Z': 5}
+                setattr(smc, cache, {})
+                setattr(smc, method, Mock(return_value={}))
+                smc.send_command = Mock()
+                with self.assertRaisesRegex(RuntimeError, command):
+                    smc.move('Z', 1)
+                self.assertFalse(any(call.args[0].startswith('G0 ')
+                                     for call in smc.send_command.call_args_list))
+                smc.transport = None
+
     def test_transport_selection(self):
         self.assertIsInstance(create_transport('COM3'), SerialTransport)
         self.assertIsInstance(create_transport(), SerialTransport)
