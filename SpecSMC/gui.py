@@ -11,19 +11,18 @@ from tkinter import messagebox, scrolledtext, ttk
 import serial
 import serial.tools.list_ports
 
-from .SpecSMC import DEFAULT_AXIS_ALIASES, SMC
+from .SpecSMC import DEFAULT_AXIS_ALIASES, DEFAULT_TCP_ADDRESS, SMC
 from .version import __version__
 
 
 DEFAULT_BAUD_RATE = 250000
 DEFAULT_WRITE_TIMEOUT = 0
 DEFAULT_TIMEOUT = 1
-AUTO_PORT_LABEL = 'Auto'
 LINEAR_STEP_VALUES = ('0.1', '0.5', '1')
 ROTATION_STEP_VALUES = ('0.1', '0.5', '1', '5', '10')
-DEFAULT_AXIS_ORDER = ('Z', 'X', 'Y', 'E')
-CONTROLLER_AXIS_ORDER = ('X', 'Y', 'Z', 'E')
-DEFAULT_AXIS_TYPES = {'X': 'r', 'Y': 'l', 'Z': 'l', 'E': 'l'}
+DEFAULT_AXIS_ORDER = ('Z',)
+CONTROLLER_AXIS_ORDER = ('Z',)
+DEFAULT_AXIS_TYPES = {'Z': 'l'}
 DEFAULT_AXIS_LIMITS = {'Z': {'min': 0.0, 'max': 8.0}}
 CONFIG_DIR = Path(__file__).resolve().parent / 'config'
 CONFIG_PATH = CONFIG_DIR / 'config.json'
@@ -145,7 +144,7 @@ class SMCGui(tk.Tk):
     background thread so long-running moves do not block the interface.
     """
 
-    def __init__(self, port=None, baud_rate=DEFAULT_BAUD_RATE, write_timeout=DEFAULT_WRITE_TIMEOUT, timeout=DEFAULT_TIMEOUT, auto_connect=True, axis_aliases=None):
+    def __init__(self, port=None, baud_rate=DEFAULT_BAUD_RATE, write_timeout=DEFAULT_WRITE_TIMEOUT, timeout=DEFAULT_TIMEOUT, axis_aliases=None):
         """
         Create the GUI and optionally pre-fill connection settings.
 
@@ -154,7 +153,6 @@ class SMCGui(tk.Tk):
             baud_rate: Initial baud rate value.
             write_timeout: Initial serial write timeout in seconds.
             timeout: Initial serial read timeout in seconds.
-            auto_connect: If ``True``, attempt to connect after the GUI opens.
             axis_aliases: Optional display aliases keyed by controller axis.
         """
         super().__init__()
@@ -190,7 +188,7 @@ class SMCGui(tk.Tk):
         self.axis_page_widgets = {}
         self._axis_labels(DEFAULT_AXIS_ORDER)
 
-        self.port_var = tk.StringVar(value=port or AUTO_PORT_LABEL)
+        self.port_var = tk.StringVar(value=port or DEFAULT_TCP_ADDRESS)
         self.baud_var = tk.StringVar(value=str(baud_rate))
         self.write_timeout_var = tk.StringVar(value=str(write_timeout))
         self.timeout_var = tk.StringVar(value=str(timeout))
@@ -223,8 +221,6 @@ class SMCGui(tk.Tk):
         self._set_controls_enabled(False)
         self._update_all_motion_button_layouts()
         self._poll_worker_results()
-        if auto_connect:
-            self.after(200, self._connect)
 
     def _build_ui(self):
         """
@@ -280,7 +276,7 @@ class SMCGui(tk.Tk):
         frame.columnconfigure(1, weight=1)
 
         ttk.Label(frame, text='Port').grid(row=0, column=0, sticky='w')
-        self.port_combo = ttk.Combobox(frame, textvariable=self.port_var, width=18)
+        self.port_combo = ttk.Combobox(frame, textvariable=self.port_var, width=32)
         self.port_combo.grid(row=0, column=1, sticky='ew', padx=(8, 0))
 
         ttk.Button(frame, text='Refresh', command=self._refresh_ports).grid(row=0, column=2, padx=(8, 0))
@@ -506,9 +502,9 @@ class SMCGui(tk.Tk):
         Refresh the serial port dropdown from currently available ports.
         """
         ports = [port.device for port in serial.tools.list_ports.comports()]
-        self.port_combo['values'] = [AUTO_PORT_LABEL] + ports
+        self.port_combo['values'] = [DEFAULT_TCP_ADDRESS] + ports
         if not self.port_var.get():
-            self.port_var.set(AUTO_PORT_LABEL)
+            self.port_var.set(DEFAULT_TCP_ADDRESS)
 
     def _connect(self):
         """
@@ -520,9 +516,9 @@ class SMCGui(tk.Tk):
             self._disconnect()
 
         try:
-            port = self.port_var.get()
-            if not port or port == AUTO_PORT_LABEL:
-                port = None
+            port = self.port_var.get().strip()
+            if not port or port.lower() == 'auto':
+                raise ValueError('Select a serial port or enter a TCP address.')
             baud_rate = int(self.baud_var.get())
             write_timeout = float(self.write_timeout_var.get())
             timeout = float(self.timeout_var.get())
@@ -564,8 +560,8 @@ class SMCGui(tk.Tk):
         Close the current serial connection.
         """
         self._stop_connection_health_check()
-        if self.smc and getattr(self.smc, 'ser', None) and self.smc.ser.is_open:
-            self.smc.ser.close()
+        if self.smc and getattr(self.smc, 'transport', None) and self.smc.transport.is_open:
+            self.smc.close()
         self.smc = None
         self.connection_var.set('Disconnected')
         self._set_connection_indicator('disconnected')
@@ -595,19 +591,15 @@ class SMCGui(tk.Tk):
         """
         Return the current serial port name, if known.
         """
-        if not self.smc or not getattr(self.smc, 'ser', None):
+        if not self.smc or not getattr(self.smc, 'transport', None):
             return None
-        return getattr(self.smc.ser, 'port', None) or getattr(self.smc.ser, 'name', None)
+        return self.smc.transport.endpoint
 
     def _connected_port_available(self):
-        """
-        Return whether the connected serial port is still listed by the OS.
-        """
-        port_name = self._connected_port_name()
-        if not port_name:
+        """Ask the selected transport whether its connection is available."""
+        if not self.smc or not self.smc.transport:
             return True
-        available_ports = {port.device for port in serial.tools.list_ports.comports()}
-        return port_name in available_ports
+        return self.smc.transport.is_available()
 
     def _check_connection_health(self):
         """
@@ -617,9 +609,9 @@ class SMCGui(tk.Tk):
         if not self.smc:
             return
 
-        ser = getattr(self.smc, 'ser', None)
+        ser = getattr(self.smc, 'transport', None)
         if not ser or not ser.is_open:
-            self._connection_lost('Stepper Motor Controller serial port is closed.')
+            self._connection_lost('Stepper Motor Controller connection is closed.')
             return
 
         port_name = self._connected_port_name()
@@ -634,10 +626,10 @@ class SMCGui(tk.Tk):
         Update the GUI after an unexpected controller disconnection.
         """
         self._stop_connection_health_check()
-        if self.smc and getattr(self.smc, 'ser', None):
+        if self.smc and getattr(self.smc, 'transport', None):
             try:
-                if self.smc.ser.is_open:
-                    self.smc.ser.close()
+                if self.smc.transport.is_open:
+                    self.smc.close()
             except (OSError, serial.SerialException):
                 pass
         self.smc = None
@@ -1402,7 +1394,7 @@ class SMCGui(tk.Tk):
         Send one planner-buffered G-code line without the standard wait.
         """
         send_bytes = f'{command}\n'.encode('utf-8')
-        self.smc.ser.write(send_bytes)
+        self.smc.transport.write(send_bytes)
         time.sleep(0.005)
 
     def _motion_planner_finished(self, error, positions):
@@ -1729,11 +1721,18 @@ class SMCGui(tk.Tk):
             callback(*args)
 
     def destroy(self):
-        """Cancel result polling before destroying the Tcl/Tk interpreter."""
+        """Release the connection and cancel callbacks before Tk shuts down."""
         if self._worker_poll_job is not None:
             self.after_cancel(self._worker_poll_job)
             self._worker_poll_job = None
-        super().destroy()
+        self._stop_connection_health_check()
+        self._stop_all_motion_animations()
+        try:
+            if self.smc is not None:
+                self.smc.close()
+        finally:
+            self.smc = None
+            super().destroy()
 
     def _run_task(self, task, done, error_title):
         """
@@ -1943,12 +1942,13 @@ def build_parser():
         prog='SpecSMC-gui',
         description='Open the SpecSMC graphical control panel.',
     )
-    parser.add_argument('-p', '--port', default=None, help='Serial port to pre-fill, such as COM3.')
+    parser.add_argument('-p', '--port', default=None, help='Serial port or TCP address to pre-fill, such as COM3 or 192.168.11.2:5000.')
     parser.add_argument('-b', '--baud-rate', type=int, default=DEFAULT_BAUD_RATE, help='Serial baud rate. Defaults to 250000.')
     parser.add_argument('--write-timeout', type=float, default=DEFAULT_WRITE_TIMEOUT, help='Serial write timeout in seconds. Defaults to 0.')
     parser.add_argument('--timeout', type=float, default=DEFAULT_TIMEOUT, help='Serial read timeout in seconds. Defaults to 1.')
-    parser.add_argument('--no-auto-connect', action='store_true', help='Open the GUI without automatically connecting.')
+    parser.add_argument('--no-auto-connect', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
+    parser.add_argument("--tcp", action="store_true", help="Use TCP/IP (default 192.168.11.2:5000; override with --port).")
     return parser
 
 
@@ -1962,11 +1962,10 @@ def main(argv=None):
     """
     args = build_parser().parse_args(argv)
     app = SMCGui(
-        port=args.port,
+        port=args.port or (DEFAULT_TCP_ADDRESS if args.tcp else None),
         baud_rate=args.baud_rate,
         write_timeout=args.write_timeout,
         timeout=args.timeout,
-        auto_connect=not args.no_auto_connect,
     )
     app.mainloop()
 

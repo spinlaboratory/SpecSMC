@@ -7,12 +7,12 @@ Author: Yen-Chun Huang
 
 Date: 06/24/2026
 '''
-import serial
-import serial.tools.list_ports
+from .transports import DEFAULT_TCP_ADDRESS, Transport, create_transport
 import time
 import re
 from typing import Dict, List, Optional, Union
 
+DEFAULT_DETECTION_TIMEOUT = 2.0
 MAX_ATTEMPTS = 50
 DEFAULT_AXIS_ALIASES = {'X': 'Goniometer', 'Z': 'IRIS'}
 
@@ -35,6 +35,19 @@ def _to_float(value, name):
         return float(value)
     except (TypeError, ValueError) as error:
         raise ValueError(f'{name} must be a number') from error
+
+
+def _parse_axis_values(response, axes):
+    """Read axis-labelled settings regardless of ordering or echo prefixes."""
+    values = {}
+    pattern = r'(?<![A-Za-z0-9_])([A-Za-z])\s*(?:driver current:\s*|:\s*)?([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)'
+    for match in re.finditer(pattern, response):
+        axis = match.group(1).upper()
+        if axis in axes:
+            values[axis] = float(match.group(2))
+    if not values:
+        raise ValueError(f'No axis settings found in controller response: {response!r}')
+    return values
 
 
 def _parse_homing_sensitivity_response(response, axes):
@@ -62,10 +75,10 @@ def _parse_homing_sensitivity_response(response, axes):
 
 class SMC:
     """
-    Serial interface for a Stepper Motor Controller running Marlin G-code.
+    Controller interface running Marlin G-code over a pluggable transport.
 
     The class wraps common controller operations such as movement, homing,
-    status queries, and EEPROM settings. It opens a serial connection during
+    status queries, and EEPROM settings. It opens the selected transport during
     initialization and keeps cached copies of axis position, feedrate,
     resolution, current, and movement mode.
     """
@@ -80,12 +93,15 @@ class SMC:
         axis_types: Optional[List[str]] = None,
         axis_aliases: Optional[Dict[str, str]] = None,
         verbose=0,
+        detection_timeout=DEFAULT_DETECTION_TIMEOUT,
+        transport: Optional[Transport] = None,
     ):
         """
         Connect to the controller and initialize cached axis settings.
 
         Args:
-            port: Serial port name such as ``"COM3"``. If omitted, SpecSMC
+            port: Serial port such as ``"COM3"``, ``"192.168.11.2:5000"``,
+                or ``"socket://192.168.11.2:5000"``. If omitted, SpecSMC
                 attempts to auto-detect the controller.
             baud_rate: Serial baud rate used for the connection.
             write_timeout: Serial write timeout in seconds.
@@ -96,13 +112,19 @@ class SMC:
             axis_aliases: Optional display names keyed by controller axis.
                 Aliases are accepted as input, but G-code still uses the
                 underlying controller axis letter.
+            transport: Optional transport instance, opened and owned by SMC.
+                Overrides port, baud rate, and connection timeout arguments.
+            detection_timeout: Maximum seconds per initialization query (default 2).
             verbose: Console output level. Values greater than or equal to 1
                 print connection and validation messages.
 
         Raises:
             ConnectionError: If no controller can be found or opened.
         """
-        self.ser = None
+        self.transport = None
+        if detection_timeout <= 0:
+            raise ValueError('detection_timeout must be positive')
+        self._response_timeout = detection_timeout
         if axis is None:
             axis = ['X', 'Y', 'Z', 'E']
         if axis_types is None:
@@ -110,7 +132,14 @@ class SMC:
         if len(axis) != len(axis_types):
             raise ValueError('axis and axis_types must have the same length')
 
-        self.__autoConnectSMCSerialPort(port, baud_rate, write_timeout, timeout)
+        self.transport = transport if transport is not None else create_transport(
+            port, baud_rate=baud_rate, timeout=timeout, write_timeout=write_timeout)
+        try:
+            self.transport.open()
+        except Exception:
+            self.transport.close()
+            self.transport = None
+            raise
         self.axis = axis
         self.types = axis_types # r: rotational, l: linear
         self.axis_aliases = {axis_name: DEFAULT_AXIS_ALIASES.get(axis_name, axis_name) for axis_name in self.axis}
@@ -118,11 +147,18 @@ class SMC:
             for axis_name, alias in axis_aliases.items():
                 self.set_axis_alias(axis_name, alias)
         self._update_axis_alias_lookup()
-        self.positions = self.position()
-        self.feedrates = self.feedrate() # unit per second
-        self.homing_sensitivities = self.homing_sensitivity()
-        self.resolutions = self.steps_per_unit() # step per unit
-        self.currents = self.current() # mA
+        try:
+            self.positions = self.position()
+            self.feedrates = self.feedrate() # unit per second
+            self.homing_sensitivities = self.homing_sensitivity()
+            self.resolutions = self.steps_per_unit() # step per unit
+            self.currents = self.current() # mA
+        except Exception:
+            self.transport.close()
+            self.transport = None
+            raise
+        finally:
+            self._response_timeout = None
         self.relative_mode = False # movement
         self.verbose = verbose
         if self.verbose >= 1:
@@ -238,11 +274,11 @@ class SMC:
         # print('Movement Mode: Relative') if self.relative_mode else print('Movement Mode: Absolute')
         for axis in self.axis:
             label = self.axis_label(axis)
-            s += '%s current position: %s\n' %(label, self.positions[axis])
-            s += '%s feedrate: %s\n' %(label, self.feedrates[axis])
-            s += '%s homing sensitivity: %s\n' %(label, self.homing_sensitivities[axis])
-            s += '%s steps/unit: %s\n' %(label, self.resolutions[axis])
-            s += '%s current: %s mA\n' %(label, self.currents[axis])
+            s += '%s current position: %s\n' %(label, self.positions.get(axis, 'N/A'))
+            s += '%s feedrate: %s\n' %(label, self.feedrates.get(axis, 'N/A'))
+            s += '%s homing sensitivity: %s\n' %(label, self.homing_sensitivities.get(axis, 'N/A'))
+            s += '%s steps/unit: %s\n' %(label, self.resolutions.get(axis, 'N/A'))
+            s += '%s current: %s mA\n' %(label, self.currents.get(axis, 'N/A'))
 
         return s
 
@@ -389,9 +425,7 @@ class SMC:
             self.feedrates[axis] = feedrate
             
         else:
-            feedrates = self.send_command('M203', True).strip().split(' ')[1:] # remove M203 as the first return element
-            feedrate_detail = {axis: float(feedrate.replace(axis, '')) for axis, feedrate in zip(self.axis, feedrates)}               
-            return feedrate_detail
+            return _parse_axis_values(self.send_command('M203', True), self.axis)
         
     def homing_sensitivity(self, axis: Optional[str] = None, sensitivity: Optional[Union[float, int]] = None):
         '''
@@ -541,9 +575,7 @@ class SMC:
             self.send_command('M906 %s%s'%(axis, current))
             self.currents[axis] = current
         
-        currents = self.send_command('M906', True).replace(' driver current: ', '').split('\n')
-        currents = {axis: float(current.replace(axis, '')) for axis, current in zip(self.axis, currents)}   
-        return currents
+        return _parse_axis_values(self.send_command('M906', True), self.axis)
 
     def steps_per_unit(self, axis: Optional[str] = None, step: Optional[Union[float, int]] = None):
         '''
@@ -574,9 +606,7 @@ class SMC:
             self.resolutions[axis] = step
 
         else:
-            steps = self.send_command('M92', True).strip().split(' ')[1:] # remove M203 as the first return element
-            resolutions = {axis: float(step.replace(axis, '')) for axis, step in zip(self.axis, steps)}   
-            return resolutions
+            return _parse_axis_values(self.send_command('M92', True), self.axis)
         
     def save(self):
         '''
@@ -655,27 +685,35 @@ class SMC:
                 controller response.
         
         """
-        self.ser.reset_input_buffer()  # reset and flush buffer
+        self.transport.reset_input_buffer()  # reset and flush buffer
         send_string = "%s\n" % command
         send_bytes = send_string.encode("utf-8")
-        self.ser.write(send_bytes)
+        self.transport.write(send_bytes)
         time.sleep(0.1)
-        if recv == True:
-                attempts = 0
-                from_mps_string = ''
-                while attempts < MAX_ATTEMPTS:
-                    from_mps_bytes = self.ser.readline()
+        if recv:
+            lines = []
+            original_timeout = self.transport.timeout
+            response_timeout = getattr(self, '_response_timeout', None)
+            deadline = time.monotonic() + response_timeout if response_timeout else None
+            try:
+                for _ in range(MAX_ATTEMPTS):
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        self.transport.timeout = min(original_timeout, remaining) if original_timeout is not None else remaining
+                    raw_line = self.transport.readline()
                     try:
-                        if attempts == 0:
-                            from_mps_string += from_mps_bytes.decode("utf-8").rstrip()
-                        else:
-                            if 'ok' in from_mps_bytes.decode("utf-8").rstrip():
-                                return from_mps_string
-                            from_mps_string += '\n' + from_mps_bytes.decode("utf-8").rstrip()
-                    except:
-                        print('Warning: the decode is not working appropriately.')
-                    attempts += 1
-                raise RuntimeError('Maximum attempts reached')
+                        line = raw_line.decode('utf-8').rstrip()
+                    except UnicodeDecodeError:
+                        continue
+                    if line == 'ok' or line.startswith('ok '):
+                        return '\n'.join(lines)
+                    if line:
+                        lines.append(line)
+                raise RuntimeError('Controller response timed out waiting for ok')
+            finally:
+                self.transport.timeout = original_timeout
 
     def specman_connect(self, initval: float):
         """
@@ -689,51 +727,30 @@ class SMC:
         """
         return 'Acknowledged specman connection',True
         
-    def __autoConnectSMCSerialPort(self, port, baud_rate, write_timeout, timeout):
-        """
-        Open the serial connection to the controller.
+    @property
+    def ser(self):
+        """Compatibility alias; new code should use transport or close()."""
+        return self.transport
 
-        Args:
-            port: Serial port name or port object. If ``None``, connected ports
-                are scanned for the expected controller USB identifiers.
-            baud_rate: Serial baud rate.
-            write_timeout: Serial write timeout in seconds.
-            timeout: Serial read timeout in seconds.
+    def close(self):
+        """Release the owned connection."""
+        if getattr(self, 'transport', None) is not None:
+            self.transport.close()
 
-        Returns:
-            ``True`` when the serial port opens successfully.
+    def __enter__(self):
+        return self
 
-        Raises:
-            ConnectionError: If no controller port is found or the serial port
-            cannot be opened.
-        """
-        
-        if port is None: # auto detection
-            ports = list(serial.tools.list_ports.comports())
-            for p in ports:
-                if p.vid == 1155 or p.pid == 22336:
-                    port = p.device
-        
-        if port is None:
-            raise ConnectionError('Please connect stepper motor controller or specify the port')
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
 
-        try:
-            self.ser = serial.Serial(port, baud_rate, write_timeout = write_timeout, timeout = timeout)
-            self.ser.reset_input_buffer()
-            return True
-        except Exception as error:
-            port_name = getattr(port, 'device', port)
-            raise ConnectionError('No stepper motor controller is found on port %s' %port_name) from error
-        
-        
-    
     def __del__(self):
-        """
-        Close the serial port when the object is garbage-collected.
-        """
-        if getattr(self, 'ser', None) and self.ser.is_open:
-            self.ser.close()
-                
+        # Finalizers may run after platform handles and modules are torn down.
+        # Explicit close() still reports errors to its caller.
+        try:
+            self.close()
+        except Exception:
+            pass
+
 if __name__ == "__main__":
     smc = SMC()
     print('===========================')

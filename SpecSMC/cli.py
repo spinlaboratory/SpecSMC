@@ -4,7 +4,7 @@ import cmd
 import pprint
 import shlex
 
-from .SpecSMC import SMC
+from .SpecSMC import DEFAULT_TCP_ADDRESS, SMC
 from .version import __version__
 
 
@@ -207,7 +207,7 @@ def build_parser():
         "-p",
         "--port",
         default=None,
-        help="Serial port to connect to, such as COM3. Defaults to auto-detect.",
+        help="Serial port or TCP address, such as COM3 or 192.168.11.2:5000. Defaults to USB auto-detect.",
     )
     parser.add_argument(
         "-b",
@@ -236,6 +236,7 @@ def build_parser():
         help="Console output level. Defaults to 0.",
     )
 
+    parser.add_argument("--tcp", action="store_true", help="Use TCP/IP (default 192.168.11.2:5000; override with --port).")
     return parser
 
 
@@ -249,7 +250,7 @@ def main(argv=None):
     """
     args = build_parser().parse_args(argv)
     smc = SMC(
-        port=args.port,
+        port=args.port or (DEFAULT_TCP_ADDRESS if args.tcp else None),
         baud_rate=args.baud_rate,
         write_timeout=args.write_timeout,
         timeout=args.timeout,

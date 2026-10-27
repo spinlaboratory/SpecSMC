@@ -89,17 +89,15 @@ You can pre-fill the connection settings from the command line:
 SpecSMC-gui -p COM3 -b 96000
 ```
 
-The GUI attempts to connect automatically when it opens. By default, the port
-selector uses `Auto`, which lets SpecSMC detect the controller. To open the GUI
-without connecting automatically:
-
-```console
-SpecSMC-gui --no-auto-connect
-```
+The GUI opens disconnected. Choose a port in the Connection tab and click
+Connect when ready. The port defaults to `192.168.11.2:5000`; the dropdown
+also lists available serial ports. Select an explicit port or enter a TCP
+address. Command-line connection options only pre-fill the settings; they
+do not initiate a connection.
 
 The GUI provides controls for:
 
-- Top tabs for each configured axis, Connection, Advanced, and Raw command.
+- Top tabs for IRIS (Z), Connection, Advanced, and Raw command.
 - A bottom log window for status and command output.
 - Connecting and disconnecting from the controller.
 - A connection LED: red for disconnected, green for connected, and orange while busy.
@@ -125,6 +123,8 @@ for deliberate out-of-range moves on the selected axis only.
 The GUI checks the connected serial port periodically. If the controller is
 physically disconnected, the connection LED turns red and motion controls are
 disabled.
+
+The GUI manages only IRIS (Z); the Python API still supports other controller axes.
 
 The selected axis controls are type-aware: linear axes enable position arrows,
 and rotational axes enable angle arrows. Linear axis tabs show only position
@@ -157,6 +157,73 @@ import SpecSMC
 
 smc = SpecSMC.SMC(port="COM3", baud_rate=96000)
 ```
+
+## TCP/IP connection
+
+Use the default address, `192.168.11.2:5000`:
+
+```console
+SpecSMC --tcp
+SpecSMC-gui --tcp
+```
+
+In the GUI, select `192.168.11.2:5000` in the Connection tab's Port dropdown.
+You can also type a different `HOST:PORT` or `socket://HOST:PORT` address.
+For either command, use `--tcp -p 192.168.11.3:5000` to override the address.
+Baud rate applies only to USB serial connections.
+
+```python
+smc = SpecSMC.SMC(port="192.168.11.2:5000")
+```
+
+The network controller must accept raw newline-delimited G-code over TCP.
+USB auto-detection remains the default. Each initialization query now stops
+waiting after 2 seconds, instead of up to 50 read attempts. Adjust this limit
+in Python with `SMC(detection_timeout=5)` for a slower controller. Failed
+initialization closes the connection.
+TCP disconnects are detected when a command encounters a transport error;
+USB connections also retain the periodic device-presence check.
+
+## Transport classes
+
+`SMC` handles G-code and controller state. `SerialTransport` handles serial
+connections and USB discovery; `TCPTransport` handles network connections.
+Both implement the `Transport` interface for byte I/O, timeouts, connection
+availability, and lifecycle. TCP currently uses pySerial's socket backend.
+The existing `SMC(port=...)` API chooses the appropriate transport automatically.
+
+Transport implementations are organized as a package:
+
+```text
+SpecSMC/transports/
+    __init__.py   # Public exports and automatic transport selection
+    base.py       # Transport interface and shared stream adapter
+    serial.py     # SerialTransport
+    tcp.py        # TCPTransport (Ethernet or Wi-Fi)
+```
+
+To add a protocol, add a module with a class implementing `Transport` and pass
+its instance to `SMC(transport=...)`. Controller code does not need to change.
+Export the class in `transports/__init__.py` if you want a package-level import;
+update `create_transport()` only if automatic port-based selection is needed.
+
+You can also provide the connection explicitly:
+
+```python
+from SpecSMC import SMC, SerialTransport, TCPTransport
+
+# TCP defaults to 192.168.11.2:5000.
+with SMC(transport=TCPTransport()) as smc:
+    print(smc.position())
+
+with SMC(transport=SerialTransport(port="COM3", baud_rate=250000)) as smc:
+    print(smc.position())
+```
+
+`SMC` opens and owns the supplied transport. Leaving the context manager or
+calling `smc.close()` closes it. When passing a transport, configure its baud
+rate and timeouts on that instance. Custom connections can subclass `Transport`.
+`smc.ser` remains a compatibility alias for `smc.transport`.
 
 ## Sending Commands
 
