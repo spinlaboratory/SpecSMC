@@ -9,6 +9,7 @@ Date: 06/24/2026
 '''
 from .transports import DEFAULT_TCP_ADDRESS, Transport, create_transport
 import time
+import math
 import re
 from typing import Dict, List, Optional, Union
 
@@ -302,6 +303,21 @@ class SMC:
         """
         return self.status()
     
+    def _motion_state(self, axis):
+        """Require reported position and a positive feedrate before moving."""
+        if axis not in self.positions:
+            self.positions = self.position()
+        if axis not in self.feedrates:
+            self.feedrates = self.feedrate()
+        if axis not in self.positions:
+            raise RuntimeError(f'Cannot move {axis}: controller M114 reply is missing its position')
+        if axis not in self.feedrates:
+            raise RuntimeError(f'Cannot move {axis}: controller M203 reply is missing its feedrate')
+        position, feedrate = self.positions[axis], self.feedrates[axis]
+        if not math.isfinite(position) or not math.isfinite(feedrate) or feedrate <= 0:
+            raise RuntimeError(f'Cannot move {axis}: invalid position or feedrate reported by controller')
+        return position, feedrate
+
     def move(self, axis: str, position: Union[float, int, str]):
         '''
         Move a linear axis to a target position.
@@ -337,9 +353,9 @@ class SMC:
                 print('Axis type does not match.')
             return False
         
+        current_position, feedrate = self._motion_state(axis)
         self.send_command('G0 %s%s'%(axis, position))
-        feedrate = self.feedrates[axis]
-        difference = abs(position) if self.relative_mode else abs(self.positions[axis] - position)
+        difference = abs(position) if self.relative_mode else abs(current_position - position)
         time.sleep(difference/feedrate + 0.2)
         self.positions = self.position()
         return True
@@ -384,9 +400,9 @@ class SMC:
                 print('position is out of range')
             return False
          
+        current_position, feedrate = self._motion_state(axis)
         self.send_command('G0 %s%s'%(axis, theta))
-        feedrate = self.feedrates[axis]
-        difference = abs(theta) if self.relative_mode else abs(self.positions[axis] - theta)
+        difference = abs(theta) if self.relative_mode else abs(current_position - theta)
         time.sleep(difference/feedrate + 0.2)
         if self.relative_mode:
             self.positions[axis] += theta 
@@ -478,15 +494,10 @@ class SMC:
             self.positions[axis] = position
 
         else:
-            positions = self.send_command('M114', True).split(' ')
-            position_detail = {}
-            for position in positions:
-                axis = position.split(':')[0]
-                if axis in self.axis:
-                    val = position.split(':')[1]
-                    position_detail[axis] = float(val)
-                if axis == 'Count':
-                    break
+            response = self.send_command('M114', True)
+            # Count values are step counts, not controller coordinates.
+            coordinates = re.split(r'\bCount\b', response, maxsplit=1)[0]
+            position_detail = _parse_axis_values(coordinates, self.axis)
             time.sleep(0.2)
             return position_detail
     
