@@ -13,6 +13,7 @@ import serial.tools.list_ports
 
 from .SpecSMC import DEFAULT_AXIS_ALIASES, DEFAULT_TCP_ADDRESS, SMC
 from .version import __version__
+from .theme import BACKGROUND, install_shapes
 
 
 DEFAULT_BAUD_RATE = 250000
@@ -156,9 +157,10 @@ class SMCGui(tk.Tk):
             axis_aliases: Optional display aliases keyed by controller axis.
         """
         super().__init__()
-        self.title('SpecSMC Control Panel')
-        self.geometry('560x620')
-        self.minsize(520, 560)
+        self.geometry('600x660')
+        self.minsize(560, 600)
+        self.title(f'SpecSMC Control Panel — v{__version__}')
+        self._configure_style()
 
         self.smc = None
         self.busy = False
@@ -214,7 +216,7 @@ class SMCGui(tk.Tk):
         self.raw_recv_var = tk.BooleanVar(value=True)
 
         self.step_button_style = 'MotionStep.TButton'
-        ttk.Style(self).configure(self.step_button_style, font=('TkDefaultFont', 16, 'bold'), padding=(12, 12))
+        ttk.Style(self).configure(self.step_button_style, font=('Segoe UI', 13), padding=(6, 4))
 
         self._build_ui()
         self._refresh_ports()
@@ -222,22 +224,70 @@ class SMCGui(tk.Tk):
         self._update_all_motion_button_layouts()
         self._poll_worker_results()
 
+    def _configure_style(self):
+        """Apply EPRWizard's panel style using SpinLab's Bruker palette."""
+        self.configure(background=BACKGROUND)
+        self.option_add('*TCombobox*Listbox.background', '#ffffff')
+        self.option_add('*TCombobox*Listbox.selectBackground', '#0071BC')
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        style.configure('.', font=('Segoe UI', 10), background='#ffffff',
+                        foreground='#313331', bordercolor='#DCDCDC',
+                        lightcolor='#ffffff', darkcolor='#DCDCDC')
+        style.configure('TFrame', background='#ffffff')
+        style.configure('TLabel', background='#ffffff')
+        style.configure('TLabelframe', background=BACKGROUND, relief='solid', borderwidth=1)
+        style.configure('TLabelframe.Label', background=BACKGROUND,
+                        foreground='#054169', font=('Segoe UI', 10, 'bold'))
+        style.configure('TButton', padding=(10, 6), background='#ffffff', relief='flat')
+        style.map('TButton', background=[('disabled', '#E5F1F8'), ('pressed', '#DCDCDC'), ('active', '#E5F1F8')],
+                  foreground=[('disabled', '#A0A0A0')], bordercolor=[('focus', '#0071BC'), ('active', '#0071BC')])
+        style.configure('Primary.TButton', background='#0071BC', foreground='#ffffff')
+        style.map('Primary.TButton', background=[('disabled', '#DCDCDC'), ('pressed', '#054169'), ('active', '#054169')],
+                  foreground=[('disabled', '#737373'), ('!disabled', '#ffffff')])
+        style.configure('TEntry', fieldbackground='#ffffff', padding=4)
+        style.configure('TCombobox', fieldbackground='#ffffff', padding=4, arrowsize=14)
+        style.map('TCombobox', fieldbackground=[('readonly', '#ffffff')],
+                  selectbackground=[('!disabled', '#0071BC')], selectforeground=[('!disabled', '#ffffff')])
+        style.configure('TNotebook', background='#E5F1F8', borderwidth=0)
+        style.configure('TNotebook.Tab', padding=(14, 8), background='#E5F1F8', foreground='#737373')
+        style.map('TNotebook.Tab', background=[('selected', '#ffffff'), ('active', '#ffffff')],
+                  foreground=[('selected', '#0071BC')])
+        style.configure('Header.TFrame', background='#054169')
+        style.configure('Header.TLabel', background='#054169', foreground='#ffffff', font=('Segoe UI', 17, 'bold'))
+        style.configure('Subtitle.TLabel', background='#054169', foreground='#E5F1F8', font=('Segoe UI', 9))
+        style.configure('Page.TFrame', background=BACKGROUND)
+        style.configure('Page.TLabel', background=BACKGROUND)
+        style.configure('TNotebook', background=BACKGROUND)
+        style.layout('TNotebook', [('Notebook.client', {'sticky': 'nsew'})])
+        style.configure('TLabelframe.Label', font=('Segoe UI', 10))
+        style.configure('TNotebook.Tab', padding=(20, 12), font=('Segoe UI', 10))
+        install_shapes(self, style)
+
     def _build_ui(self):
         """
         Build all Tkinter widgets for the control panel.
         """
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=3)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(1, weight=3)
+        self.rowconfigure(2, weight=1)
+
+        header = ttk.Frame(self, style='Header.TFrame', padding=(16, 8))
+        header.grid(row=0, column=0, sticky='ew')
+        header.columnconfigure(1, weight=1)
+        ttk.Label(header, text='SpecSMC', style='Header.TLabel').grid(row=0, column=0, sticky='w')
+        ttk.Label(header, text='Stepper Motor Controller', style='Subtitle.TLabel').grid(row=0, column=1, sticky='w', padx=12)
+        self.bruker_logo = tk.PhotoImage(file=str(Path(__file__).resolve().parent / 'assets' / 'bruker.png'))
+        tk.Label(header, image=self.bruker_logo, background='#ffffff', padx=8, pady=4).grid(row=0, column=2, sticky='e')
 
         self.tabs = ttk.Notebook(self)
-        self.tabs.grid(row=0, column=0, sticky='nsew', padx=12, pady=(12, 6))
+        self.tabs.grid(row=1, column=0, sticky='nsew', pady=(0, 8))
 
-        self.connection_tab = ttk.Frame(self.tabs, padding=12)
-        self.advanced_tab = ttk.Frame(self.tabs, padding=12)
-        self.raw_tab = ttk.Frame(self.tabs, padding=12)
+        self.connection_tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
+        self.advanced_tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
+        self.raw_tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
         for axis in DEFAULT_AXIS_ORDER:
-            tab = ttk.Frame(self.tabs, padding=12)
+            tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
             tab.columnconfigure(0, weight=1)
             tab.rowconfigure(0, weight=1)
             self.axis_tab_frames[axis] = tab
@@ -257,8 +307,8 @@ class SMCGui(tk.Tk):
         self._build_advanced_panel(self.advanced_tab)
         self._build_raw_panel(self.raw_tab)
 
-        bottom = ttk.Frame(self, padding=(12, 0, 12, 12))
-        bottom.grid(row=1, column=0, sticky='nsew')
+        bottom = ttk.Frame(self, padding=(12, 0, 12, 12), style='Page.TFrame')
+        bottom.grid(row=2, column=0, sticky='nsew')
         bottom.rowconfigure(1, weight=1)
         bottom.columnconfigure(0, weight=1)
         self._build_status_panel(bottom)
@@ -292,11 +342,10 @@ class SMCGui(tk.Tk):
 
         buttons = ttk.Frame(frame)
         buttons.grid(row=4, column=0, columnspan=3, sticky='ew', pady=(10, 0))
-        buttons.columnconfigure((0, 1), weight=1)
-        self.connect_button = ttk.Button(buttons, text='Connect', command=self._connect)
-        self.connect_button.grid(row=0, column=0, sticky='ew', padx=(0, 4))
-        self.disconnect_button = ttk.Button(buttons, text='Disconnect', command=self._disconnect)
-        self.disconnect_button.grid(row=0, column=1, sticky='ew', padx=(4, 0))
+        self.connect_button = ttk.Button(buttons, text='Connect', style='Primary.TButton', command=self._connect)
+        self.connect_button.grid(row=0, column=0, sticky='w', padx=(0, 4))
+        self.disconnect_button = ttk.Button(buttons, text='Disconnect', style='Danger.TButton', command=self._disconnect)
+        self.disconnect_button.grid(row=0, column=1, sticky='w', padx=(4, 0))
 
         ttk.Label(frame, textvariable=self.connection_var).grid(row=5, column=0, columnspan=3, sticky='w', pady=(10, 0))
 
@@ -334,26 +383,25 @@ class SMCGui(tk.Tk):
 
         row = ttk.Frame(frame)
         row.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(10, 0))
-        row.columnconfigure((0, 1, 2), weight=1)
         self.home_axis_button = ttk.Button(row, text='Home Axis', command=self._home_axis)
-        self.home_axis_button.grid(row=0, column=0, sticky='ew', padx=(0, 4))
+        self.home_axis_button.grid(row=0, column=0, sticky='w', padx=(0, 4))
         self.set_home_button = ttk.Button(row, text='Set Home', command=self._set_home)
-        self.set_home_button.grid(row=0, column=1, sticky='ew', padx=4)
+        self.set_home_button.grid(row=0, column=1, sticky='w', padx=4)
         self.current_status_button = ttk.Button(row, text='Current Status', command=self._refresh_status)
-        self.current_status_button.grid(row=0, column=2, sticky='ew', padx=(4, 0))
+        self.current_status_button.grid(row=0, column=2, sticky='w', padx=(4, 0))
 
         self.motion_display_frame = ttk.Frame(frame)
         self.motion_display_frame.grid(row=2, column=0, columnspan=2, sticky='nsew', pady=(12, 0))
         self.motion_display_frame.columnconfigure(0, weight=1)
         self.motion_display_frame.rowconfigure(0, weight=1)
 
-        self.motion_canvas = tk.Canvas(self.motion_display_frame, height=220, bg='white', highlightthickness=1, highlightbackground='#d0d0d0')
+        self.motion_canvas = tk.Canvas(self.motion_display_frame, height=220, bg='white', highlightthickness=1, highlightbackground='#DCDCDC')
         self.motion_canvas.grid(row=0, column=0, sticky='nsew')
         self.motion_canvas.bind('<Configure>', lambda event, axis=axis: self._draw_motion_indicator(axis))
 
         self.motion_step_frame = ttk.Frame(self.motion_display_frame)
         self.motion_step_frame.grid(row=0, column=1, sticky='ns', padx=(10, 0))
-        self.motion_step_frame.columnconfigure(0, minsize=84)
+        self.motion_step_frame.columnconfigure(0, minsize=64)
         self.motion_step_frame.rowconfigure(0, weight=1)
         self.motion_step_frame.rowconfigure(4, weight=1)
 
@@ -480,21 +528,24 @@ class SMCGui(tk.Tk):
         Args:
             parent: Parent Tkinter widget.
         """
-        top = ttk.Frame(parent)
+        top = ttk.Frame(parent, style='Page.TFrame')
         top.grid(row=0, column=0, sticky='ew', pady=(0, 8))
         top.columnconfigure(0, weight=1)
 
-        ttk.Label(top, text='Status and Log').grid(row=0, column=0, sticky='w')
-        self.connection_led = tk.Canvas(top, width=16, height=16, highlightthickness=0)
+        ttk.Label(top, text='Status and Log', style='Page.TLabel').grid(row=0, column=0, sticky='w')
+        self.connection_led = tk.Canvas(top, width=16, height=16, highlightthickness=0, background=BACKGROUND)
         self.connection_led.grid(row=0, column=1, sticky='e', padx=(0, 6))
         self.connection_led_oval = self.connection_led.create_oval(2, 2, 14, 14, fill='red', outline='red')
-        ttk.Label(top, textvariable=self.connection_var).grid(row=0, column=2, sticky='e', padx=(0, 12))
+        ttk.Label(top, textvariable=self.connection_var, style='Page.TLabel').grid(row=0, column=2, sticky='e', padx=(0, 12))
         self.refresh_status_button = ttk.Button(top, text='Refresh Status', command=self._refresh_status)
         self.refresh_status_button.grid(row=0, column=3, sticky='e', padx=(0, 8))
         self.clear_log_button = ttk.Button(top, text='Clear', command=self._clear_log)
         self.clear_log_button.grid(row=0, column=4, sticky='e')
 
-        self.log = scrolledtext.ScrolledText(parent, height=8, wrap='word', state='disabled')
+        self.log = scrolledtext.ScrolledText(parent, height=8, wrap='word', state='disabled',
+                                           bg='#ffffff', fg='#313331', font=('Consolas', 9),
+                                           relief='flat', highlightthickness=1, highlightbackground='#DCDCDC',
+                                           selectbackground='#0071BC', selectforeground='#ffffff')
         self.log.grid(row=1, column=0, sticky='nsew')
 
     def _refresh_ports(self):
@@ -772,7 +823,7 @@ class SMCGui(tk.Tk):
         widgets['motion_display_frame'].grid(row=2, column=0, columnspan=2, sticky='nsew', pady=(12, 0))
         widgets['motion_canvas'].grid(row=0, column=0, sticky='nsew')
         widgets['motion_step_frame'].grid(row=0, column=1, sticky='ns', padx=(10, 0))
-        widgets['motion_step_frame'].columnconfigure(0, minsize=84)
+        widgets['motion_step_frame'].columnconfigure(0, minsize=64)
         widgets['motion_step_frame'].rowconfigure(0, weight=1)
         widgets['motion_step_frame'].rowconfigure(4, weight=1)
         self._draw_motion_indicator(axis)
@@ -821,10 +872,10 @@ class SMCGui(tk.Tk):
         top = 34
         bottom = height - 28
         center_x = width / 2
-        canvas.create_line(center_x, top, center_x, bottom, width=6, fill='#c7d2fe', capstyle='round')
+        canvas.create_line(center_x, top, center_x, bottom, width=6, fill='#E5F1F8', capstyle='round')
         for tick in range(5):
             y = top + (bottom - top) * tick / 4
-            canvas.create_line(center_x - 12, y, center_x + 12, y, fill='#64748b')
+            canvas.create_line(center_x - 12, y, center_x + 12, y, fill='#737373')
 
         min_value, max_value = self._axis_limits(axis)
         if min_value is None or max_value is None or min_value == max_value:
@@ -832,10 +883,10 @@ class SMCGui(tk.Tk):
         normalized = (value - min_value) / (max_value - min_value)
         normalized = max(0.0, min(1.0, normalized))
         marker_y = bottom - normalized * (bottom - top)
-        canvas.create_oval(center_x - 7, marker_y - 7, center_x + 7, marker_y + 7, fill='#2563eb', outline='')
-        canvas.create_text(width / 2, 18, text=f'{self._axis_label(axis)} position: {self._format_value(value, fixed=True)}', fill='#0f172a')
-        canvas.create_text(center_x + 46, top, text=self._format_value(max_value), fill='#64748b')
-        canvas.create_text(center_x + 46, bottom, text=self._format_value(min_value), fill='#64748b')
+        canvas.create_oval(center_x - 7, marker_y - 7, center_x + 7, marker_y + 7, fill='#0071BC', outline='')
+        canvas.create_text(width / 2, 18, text=f'{self._axis_label(axis)} position: {self._format_value(value, fixed=True)}', fill='#313331')
+        canvas.create_text(center_x + 46, top, text=self._format_value(max_value), fill='#737373')
+        canvas.create_text(center_x + 46, bottom, text=self._format_value(min_value), fill='#737373')
 
     def _draw_rotation_indicator(self, canvas, width, height, axis, value):
         """
@@ -844,18 +895,18 @@ class SMCGui(tk.Tk):
         cx = width / 2
         cy = height / 2 + 10
         radius = min(width, height) * 0.22
-        canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline='#93c5fd', width=4)
-        canvas.create_text(width / 2, 16, text=f'{self._axis_label(axis)} angle: {self._format_value(value, fixed=True)} deg', fill='#0f172a')
+        canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, outline='#E5F1F8', width=4)
+        canvas.create_text(width / 2, 16, text=f'{self._axis_label(axis)} angle: {self._format_value(value, fixed=True)} deg', fill='#313331')
         angle = math.radians(value - 90)
         pointer_x = cx + math.cos(angle) * radius * 0.78
         pointer_y = cy + math.sin(angle) * radius * 0.78
-        canvas.create_line(cx, cy, pointer_x, pointer_y, width=4, fill='#2563eb', capstyle='round')
-        canvas.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill='#1d4ed8', outline='')
+        canvas.create_line(cx, cy, pointer_x, pointer_y, width=4, fill='#0071BC', capstyle='round')
+        canvas.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill='#054169', outline='')
         for label, degrees in (('0', -90), ('90', 0), ('180', 90), ('270', 180)):
             tick_angle = math.radians(degrees)
             tx = cx + math.cos(tick_angle) * (radius + 16)
             ty = cy + math.sin(tick_angle) * (radius + 16)
-            canvas.create_text(tx, ty, text=label, fill='#64748b')
+            canvas.create_text(tx, ty, text=label, fill='#737373')
 
     def _draw_all_motion_indicators(self):
         """

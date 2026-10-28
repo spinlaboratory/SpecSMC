@@ -32,7 +32,7 @@ SpecSMC-gui = "SpecSMC.gui:main"
 where = ["."]
 
 [tool.setuptools.package-data]
-SpecSMC = ["config/default_config.json"]
+SpecSMC = ["config/default_config.json", "assets/*.png"]
 
 [tool.setuptools.dynamic]
 version = { attr = "SpecSMC.version.__version__" }
