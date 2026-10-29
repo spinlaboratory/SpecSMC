@@ -83,6 +83,14 @@ SpecSMC also includes a Tkinter GUI. Start it with:
 SpecSMC-gui
 ```
 
+On Windows, `SpecSMC-gui` runs without an attached console, so you can close
+the terminal after starting the GUI. After updating an existing installation,
+reinstall the package (`python -m pip install .`, or `python -m pip install -e .`
+for development) to regenerate the launcher.
+
+When running directly from source on Windows, use
+`pythonw -m SpecSMC.gui` to start the GUI without an attached console.
+
 You can pre-fill the connection settings from the command line:
 
 ```console
@@ -101,15 +109,12 @@ The GUI provides controls for:
 - A bottom log window for status and command output.
 - Connecting and disconnecting from the controller.
 - A connection LED: red for disconnected, green for connected, and orange while busy.
-- Selecting a motion axis directly from the top-level tabs.
-- Moving a linear axis.
-- Rotating a rotational axis.
+- Moving IRIS (Z) as a linear or rotational axis.
 - Viewing a live vertical position rail or rotation dial for the selected axis.
 - Homing a selected linear axis.
 - Setting home position.
 - Reading current status.
-- Automatically switching between absolute text-entry moves and relative arrow-step moves.
-- Using the Advanced tab to choose an axis independently and edit display name, motion type, motion limits, feedrate, homing sensitivity, motor current, and steps per unit.
+- Using the Advanced tab to edit display name, motion type, motion limits, feedrate, homing sensitivity, motor current, and steps per unit.
 - Saving, restoring, and resetting controller settings.
 - Sending raw G-code commands.
 
@@ -126,11 +131,7 @@ disabled.
 
 The GUI manages only IRIS (Z); the Python API still supports other controller axes.
 
-The selected axis controls are type-aware: linear axes enable position arrows,
-and rotational axes enable angle arrows. Linear axis tabs show only position
-controls, and rotational axis tabs show only angle controls.
-
-The motion text box shows the current position or angle. Edit the value and
+Motion controls show position for linear motion and angle for rotation. Edit the value and
 press Enter to move in absolute mode. Use the arrow buttons to move by the
 selected step; arrow moves automatically switch the controller to relative
 mode. Linear axes allow 0.1, 0.5, or 1 mm steps. Rotational axes allow 0.1,
