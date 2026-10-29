@@ -21,8 +21,7 @@ DEFAULT_WRITE_TIMEOUT = 0
 DEFAULT_TIMEOUT = 1
 LINEAR_STEP_VALUES = ('0.1', '0.5', '1')
 ROTATION_STEP_VALUES = ('0.1', '0.5', '1', '5', '10')
-DEFAULT_AXIS_ORDER = ('Z',)
-CONTROLLER_AXIS_ORDER = ('Z',)
+GUI_AXES = ('Z',)
 DEFAULT_AXIS_TYPES = {'Z': 'l'}
 DEFAULT_AXIS_LIMITS = {'Z': {'min': 0.0, 'max': 8.0}}
 CONFIG_DIR = Path(__file__).resolve().parent / 'config'
@@ -53,7 +52,7 @@ def _load_config():
     return config
 
 
-def _load_saved_axis_aliases():
+def _load_saved_axis_aliases(config):
     """
     Load saved GUI axis aliases.
 
@@ -61,14 +60,13 @@ def _load_saved_axis_aliases():
         Saved aliases keyed by controller axis, or an empty dictionary when no
         valid config file exists.
     """
-    config = _load_config()
     aliases = config.get('axis_aliases', {})
     if not isinstance(aliases, dict):
         return {}
     return {str(axis).upper(): str(alias) for axis, alias in aliases.items()}
 
 
-def _load_saved_axis_types():
+def _load_saved_axis_types(config):
     """
     Load saved GUI axis motion types.
 
@@ -76,7 +74,6 @@ def _load_saved_axis_types():
         Saved axis types keyed by controller axis. Only ``"l"`` and ``"r"``
         values are accepted.
     """
-    config = _load_config()
     axis_types = config.get('axis_types', {})
     if not isinstance(axis_types, dict):
         return {}
@@ -87,14 +84,13 @@ def _load_saved_axis_types():
     }
 
 
-def _load_saved_axis_limits():
+def _load_saved_axis_limits(config):
     """
     Load saved motion limits.
 
     Returns:
         Mapping of controller axis to ``{"min": value, "max": value}``.
     """
-    config = _load_config()
     limits = config.get('axis_limits', {})
     if not isinstance(limits, dict):
         return {}
@@ -175,20 +171,21 @@ class SMCGui(tk.Tk):
         self.motion_planner_done_at = 0.0
         self.motion_planner_running = False
         self.motion_planner_lock = threading.Lock()
+        config = _load_config()
         self.axis_aliases = dict(DEFAULT_AXIS_ALIASES)
-        self.axis_aliases.update(_load_saved_axis_aliases())
+        self.axis_aliases.update(_load_saved_axis_aliases(config))
         self.axis_types = dict(DEFAULT_AXIS_TYPES)
-        self.axis_types.update(_load_saved_axis_types())
+        self.axis_types.update(_load_saved_axis_types(config))
         self.axis_limits = {axis: dict(limits) for axis, limits in DEFAULT_AXIS_LIMITS.items()}
-        self.axis_limits.update(_load_saved_axis_limits())
-        self.limit_overrides = {axis: False for axis in CONTROLLER_AXIS_ORDER}
+        self.axis_limits.update(_load_saved_axis_limits(config))
+        self.limit_overrides = {axis: False for axis in GUI_AXES}
         if axis_aliases:
             self.axis_aliases.update(axis_aliases)
         self.axis_label_to_axis = {}
         self.axis_to_label = {}
         self.axis_tab_frames = {}
         self.axis_page_widgets = {}
-        self._axis_labels(DEFAULT_AXIS_ORDER)
+        self._axis_labels(GUI_AXES)
 
         self.port_var = tk.StringVar(value=port or DEFAULT_TCP_ADDRESS)
         self.baud_var = tk.StringVar(value=str(baud_rate))
@@ -286,7 +283,7 @@ class SMCGui(tk.Tk):
         self.connection_tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
         self.advanced_tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
         self.raw_tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
-        for axis in DEFAULT_AXIS_ORDER:
+        for axis in GUI_AXES:
             tab = ttk.Frame(self.tabs, padding=12, style='Page.TFrame')
             tab.columnconfigure(0, weight=1)
             tab.rowconfigure(0, weight=1)
@@ -461,7 +458,7 @@ class SMCGui(tk.Tk):
 
         ttk.Label(frame, text='Axis').grid(row=0, column=0, sticky='w')
         self.advanced_axis_combo = ttk.Combobox(frame, textvariable=self.advanced_axis_var, width=14, state='readonly')
-        self.advanced_axis_combo.configure(values=self._axis_labels(DEFAULT_AXIS_ORDER))
+        self.advanced_axis_combo.configure(values=self._axis_labels(GUI_AXES))
         self.advanced_axis_combo.grid(row=0, column=1, sticky='ew', padx=(8, 0))
         self.advanced_axis_combo.bind('<<ComboboxSelected>>', lambda event: self._update_setting_values())
 
@@ -578,13 +575,13 @@ class SMCGui(tk.Tk):
             return
 
         def task():
-            axis_types = [self.axis_types.get(axis, DEFAULT_AXIS_TYPES.get(axis, 'l')) for axis in CONTROLLER_AXIS_ORDER]
+            axis_types = [self.axis_types.get(axis, DEFAULT_AXIS_TYPES.get(axis, 'l')) for axis in GUI_AXES]
             return SMC(
                 port=port,
                 baud_rate=baud_rate,
                 write_timeout=write_timeout,
                 timeout=timeout,
-                axis=list(CONTROLLER_AXIS_ORDER),
+                axis=list(GUI_AXES),
                 axis_types=axis_types,
                 axis_aliases=self.axis_aliases,
             )
@@ -1997,7 +1994,6 @@ def build_parser():
     parser.add_argument('-b', '--baud-rate', type=int, default=DEFAULT_BAUD_RATE, help='Serial baud rate. Defaults to 250000.')
     parser.add_argument('--write-timeout', type=float, default=DEFAULT_WRITE_TIMEOUT, help='Serial write timeout in seconds. Defaults to 0.')
     parser.add_argument('--timeout', type=float, default=DEFAULT_TIMEOUT, help='Serial read timeout in seconds. Defaults to 1.')
-    parser.add_argument('--no-auto-connect', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument("--tcp", action="store_true", help="Use TCP/IP (default 192.168.11.2:5000; override with --port).")
     return parser

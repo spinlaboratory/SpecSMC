@@ -26,6 +26,8 @@ dependencies = [
 
 [project.scripts]
 SpecSMC = "SpecSMC.cli:main"
+
+[project.gui-scripts]
 SpecSMC-gui = "SpecSMC.gui:main"
 
 [tool.setuptools.packages.find]
